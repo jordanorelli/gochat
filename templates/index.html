@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>this is not chatify</title>
+    <link rel=stylesheet href="static/css/style.css" />
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.6.4/jquery.min.js" type="text/javascript" charset="utf-8"></script>
+    <script src="static/js/chat.js"></script>
+    <script src="static/js/mustache.js"></script>
+    <script id="message-template" type="text/plain">
+      <li class="{{msgtype}}">
+        <span class="message-username">{{username}}</span>
+        <span class="message-body">{{message}}</span>
+        <span class="message-timestamp">{{formattedTime}}</span>
+      </li>
+    </script>
+    <script>
+      $(document).ready(function() {
+        Chat.buildChatWindow({
+          chatElements: "#chat-container, #logout-button",
+          messageContainer: "#message-container",
+          loginButton: "#login-button",
+          logoutButton: "#logout-button",
+          loginElements: "#login-container",
+          loginErrors: "#login-errors",
+          usernameField: "#username",
+          usernameDisplay: "#current-username",
+          sendMessageButton: "#send-button",
+          composeMessageField: "#message",
+          chatErrors: "#chat-errors",
+          messageTemplate: $("#message-template").html()
+        });
+
+        $("#username").focus();
+      });
+    </script>
+  </head>
+  <body>
+    <div id="header">
+      <h1>this is not chatify</h1>
+      <a id="logout-button" href="#" style="display: none;">log out</a>
+    </div>
+    <div id="content">
+      <div id="login-container">
+        <label id="whoareyou" for="username">Who are you?</label>
+        <input id="username" type="text"></input>
+        <input id="login-button" type="submit" name="join" value="join"
+            disabled="disabled" />
+        <span id="login-errors" class="errors" style="display: none;"></span>
+
+      </div>
+      <div id="chat-container" style="display: none;">
+        <ul id="message-container">
+        </ul>
+        <div id="footer">
+          <div id="input-container">
+            <div id="send-form">
+              <label id="current-username" for="message">anonymous:</label>
+              <textarea id="message"></textarea>
+              <input id="send-button" type="submit" name="send" value="send"
+                  disabled="disabled" />
+              <span id="chat-errors" class="errors" style="display: none;"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
