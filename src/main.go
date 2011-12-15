@@ -12,32 +12,88 @@ import (
 )
 
 var (
-    rooms map[string] *Room
-    room chan *ChatMessage
-    users *list.List
-    messageHistory *ring.Ring
+    room *Room
 )
 
 type User struct {
     Username string
     LastPollTime *time.Time
-    ResponseChan chan *ChatMessage
+    c chan *ChatMessage
+    quit chan bool
+    w http.ResponseWriter
 }
 
 type ChatMessage struct {
-    Username string
+    User *User
     Body string
     TimeStamp *time.Time
 }
 
 type Room struct {
-    Title string
     Users *list.List
     Messages *ring.Ring
     c chan *ChatMessage
 }
 
-func ParseJSONField(r *http.Request, fieldname string) (username string, err os.Error ) {
+func NewRoom() *Room {
+    r := new(Room)
+    r.Users = list.New()
+    r.Messages = ring.New(20)
+    r.c = make(chan *ChatMessage)
+    return r
+}
+
+func NewUser(username string) *User {
+    u := &User{Username: username}
+    u.c = make(chan *ChatMessage, 20)
+    return u
+}
+
+func (r *Room)getUserElement(username string) (*list.Element, *User) {
+    for e := r.Users.Front(); e != nil; e = e.Next() {
+        user := e.Value.(*User)
+        if user.Username == username {
+            return e, user
+        }
+    }
+    return nil, nil
+}
+
+func (r *Room)AddUser(username string) (*User, os.Error) {
+    user := r.GetUser(username)
+    if user != nil {
+        return nil, os.NewError("That username is already taken.")
+    }
+    user = NewUser(username)
+    r.Users.PushBack(user)
+    fmt.Printf("\tUser %s has entered the room.\n", user.Username)
+    return user, nil
+}
+
+func (r *Room)RemoveUser(username string) bool {
+    if e, _ := r.getUserElement(username); e != nil {
+        r.Users.Remove(e)
+        fmt.Printf("\tUser %s has left the room.\n", username)
+        return true
+    }
+    return false
+}
+
+func (r *Room)GetUser(username string) *User {
+    _, user := r.getUserElement(username)
+    return user
+}
+
+func (r *Room)AddMessage(msg *ChatMessage) {
+    r.Messages = r.Messages.Next()
+    r.Messages.Value = msg
+    for e := r.Users.Front(); e != nil; e = e.Next() {
+        user := e.Value.(*User)
+        user.c <- msg
+    }
+}
+
+func ParseJSONField(r *http.Request, fieldname string) (string, os.Error) {
     requestLength, err := strconv.Atoui(r.Header["Content-Length"][0])
     if err != nil {
         fmt.Fprintf(os.Stderr, "unable to convert incoming login request content-lenth to uint.")
@@ -63,26 +119,14 @@ func ParseUsername(r *http.Request) string {
     return ""
 }
 
-func ParseUser(r *http.Request) *User {
-    username := ParseUsername(r)
-    if username == "" {
-        return nil
-    }
-    for node := users.Front(); node != nil; node = node.Next() {
-        user := node.Value.(*User)
-        if user.Username == username {
-            return user
-        }
-    }
-    return nil
-}
-
 func ParseMessage(r *http.Request) (*ChatMessage, os.Error) {
     msgLength, err := strconv.Atoui(r.Header["Content-Length"][0])
     if err != nil {
         fmt.Fprintf(os.Stderr, "unable to convert incoming message content-length to uint.")
     }
-    m := &ChatMessage{Username: ParseUsername(r), TimeStamp: time.UTC()}
+    from := room.GetUser(ParseUsername(r))
+
+    m := &ChatMessage{User: from, TimeStamp: time.UTC()}
     raw := make([]byte, msgLength)
     r.Body.Read(raw)
     if err := json.Unmarshal(raw, m); err != nil {
@@ -100,6 +144,7 @@ func Home(w http.ResponseWriter, r *http.Request) {
 }
 
 func LoginMux(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.RawURL)
     switch r.Method {
     case "POST":
         Login(w, r)
@@ -112,83 +157,64 @@ func Login(w http.ResponseWriter, r *http.Request) {
     username, err := ParseJSONField(r, "username")
     if err != nil {
         http.Error(w, err.String(), http.StatusInternalServerError)
+        return
     }
-    for node := users.Front(); node != nil; node = node.Next() {
-        user := node.Value.(*User)
-        if user.Username == username {
-            http.Error(w, "That username is already taken.", http.StatusForbidden)
-            return
-        }
+
+    user, err := room.AddUser(username)
+    if err != nil {
+        http.Error(w, err.String(), http.StatusInternalServerError)
+        return
     }
-    users.PushBack(&User{Username: username})
-    c := &http.Cookie{Name: "username", Value: username, HttpOnly: true}
-    http.SetCookie(w, c)
+
+    cookie := &http.Cookie{Name: "username", Value: user.Username, HttpOnly: true}
+    http.SetCookie(w, cookie)
 }
 
 func Logout(w http.ResponseWriter, r *http.Request) {
-    fmt.Println(os.Stdout, "inside logout")
-    username, err := ParseJSONField(r, "username")
-    if err != nil {
-        http.Error(w, err.String(), http.StatusInternalServerError)
+    username := ParseUsername(r)
+    if username == "" {
+        http.Error(w, "That username wasn't actually logged in.", http.StatusInternalServerError)
     }
-    for e := users.Front(); e != nil; e = e.Next() {
-        if username == e.Value {
-            users.Remove(e)
-            break
-        }
-    }
+    room.RemoveUser(username)
 }
 
 func FeedMux(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.RawURL)
     switch r.Method {
     case "GET":
-        fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.RawURL)
         Poll(w, r)
     case "POST":
-        fmt.Fprintf(os.Stdout, "%s %s \n", r.Method, r.RawURL)
-        PostMsg(w, r)
+        Post(w, r)
     }
 }
 
-func PostMsg(w http.ResponseWriter, r *http.Request) {
+func Post(w http.ResponseWriter, r *http.Request) {
     m, err := ParseMessage(r)
     if err != nil {
         http.Error(w, "Unable to parse incoming chat message", http.StatusInternalServerError)
     }
-    messageHistory = messageHistory.Next()
-    messageHistory.Value = m
-    fmt.Fprintf(os.Stdout, "%s: %s\n", m.Username, m.Body)
-    fmt.Fprintf(os.Stdout, "%s\n", messageHistory)
+    room.AddMessage(m)
+    fmt.Fprintf(os.Stdout, "\t%s: %s\n", m.User.Username, m.Body)
 }
 
 func Poll(w http.ResponseWriter, r *http.Request) {
-    user := ParseUser(r)
+    user := room.GetUser(ParseUsername(r))
+    var msg *ChatMessage
+    if user.c != nil {
+        msg = <-user.c
+        fmt.Fprintf(os.Stderr, "the user %s has a null incoming channel.\n", user.Username)
+    }
     w.Header()["Content-Type"] = []string{"application/json"}
-    if user.LastPollTime == nil {
-        first := true
-        w.Write([]byte("["))
-        messageHistory.Do(func(item interface{}) {
-            if item == nil {
-                return
-            }
-            if raw, err := json.Marshal(item); err == nil {
-                if !first {
-                    w.Write([]byte(","))
-                } else {
-                    first = false
-                }
-                w.Write(raw)
-            } else {
-                fmt.Fprintf(os.Stderr, "Poll error: %s\n", err)
-            }
-        })
-        w.Write([]byte("]"))
+    raw, err := json.Marshal(msg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "something got fucked up in json.Marshal.\n")
+    } else {
+        w.Write(raw)
     }
 }
 
 func main() {
-    users = list.New()
-    messageHistory = ring.New(20)
+    room = NewRoom()
     staticDir := http.Dir("/projects/go/chat/static")
     staticServer := http.FileServer(staticDir)
 
@@ -196,5 +222,6 @@ func main() {
     http.HandleFunc("/feed", FeedMux)
     http.HandleFunc("/login", LoginMux)
     http.Handle("/static/", http.StripPrefix("/static", staticServer))
+    fmt.Println("Serving at localhost:8080 ----------------------------------------------------")
     http.ListenAndServe(":8080", nil)
 }
