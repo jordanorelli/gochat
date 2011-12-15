@@ -120,11 +120,11 @@ var Chat = (function($) {
   var displayMessages = function(messages) {
     $(messages).each(function(){
       console.log(this.Body);
-      this.message = format(sanitize(this.Body));
+      this.Body = format(sanitize(this.Body));
       console.log(this.Body);
       $messageContainer.append(renderMessage(this));
-      if(this.timestamp && this.timestamp > lastMessageTimestamp) {
-        lastMessageTimestamp = this.timestamp;
+      if(this.TimeStamp && this.TimeStamp > lastMessageTimestamp) {
+        lastMessageTimestamp = this.TimeStamp;
       }
     });
     scrollToEnd();

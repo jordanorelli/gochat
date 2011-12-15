@@ -20,11 +20,10 @@ type User struct {
     LastPollTime *time.Time
     c chan *ChatMessage
     quit chan bool
-    w http.ResponseWriter
 }
 
 type ChatMessage struct {
-    User *User
+    Username string
     Body string
     TimeStamp *time.Time
 }
@@ -39,7 +38,6 @@ func NewRoom() *Room {
     r := new(Room)
     r.Users = list.New()
     r.Messages = ring.New(20)
-    r.c = make(chan *ChatMessage)
     return r
 }
 
@@ -93,6 +91,16 @@ func (r *Room)AddMessage(msg *ChatMessage) {
     }
 }
 
+func (m *ChatMessage)WriteToResponse(w http.ResponseWriter) {
+    w.Header()["Content-Type"] = []string{"application/json"}
+    raw, err := json.Marshal(m)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "something got fucked up in json.Marshal.\n")
+    } else {
+        w.Write(raw)
+    }
+}
+
 func ParseJSONField(r *http.Request, fieldname string) (string, os.Error) {
     requestLength, err := strconv.Atoui(r.Header["Content-Length"][0])
     if err != nil {
@@ -126,7 +134,8 @@ func ParseMessage(r *http.Request) (*ChatMessage, os.Error) {
     }
     from := room.GetUser(ParseUsername(r))
 
-    m := &ChatMessage{User: from, TimeStamp: time.UTC()}
+    fmt.Printf("\tReceived message from user %s with length %d\n", from.Username, msgLength)
+    m := &ChatMessage{Username: from.Username, TimeStamp: time.UTC()}
     raw := make([]byte, msgLength)
     r.Body.Read(raw)
     if err := json.Unmarshal(raw, m); err != nil {
@@ -194,26 +203,31 @@ func Post(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Unable to parse incoming chat message", http.StatusInternalServerError)
     }
     room.AddMessage(m)
-    fmt.Fprintf(os.Stdout, "\t%s: %s\n", m.User.Username, m.Body)
+    fmt.Fprintf(os.Stdout, "\t%s: %s\n", m.Username, m.Body)
 }
 
 func Poll(w http.ResponseWriter, r *http.Request) {
+    timeout := make(chan bool)
+    go func() {
+        time.Sleep(1.2e11) // two minutes.
+        timeout <- true
+    }()
     user := room.GetUser(ParseUsername(r))
     var msg *ChatMessage
     if user.c != nil {
-        msg = <-user.c
-        fmt.Fprintf(os.Stderr, "the user %s has a null incoming channel.\n", user.Username)
-    }
-    w.Header()["Content-Type"] = []string{"application/json"}
-    raw, err := json.Marshal(msg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "something got fucked up in json.Marshal.\n")
+        select {
+        case msg = <-user.c:
+            msg.WriteToResponse(w)
+        case <-timeout: return
+        }
     } else {
-        w.Write(raw)
+        fmt.Fprintf(os.Stderr, "the user %s has a null incoming channel.\n", user.Username)
+        return
     }
 }
 
 func main() {
+    port := "0.0.0.0:8080"
     room = NewRoom()
     staticDir := http.Dir("/projects/go/chat/static")
     staticServer := http.FileServer(staticDir)
@@ -222,6 +236,6 @@ func main() {
     http.HandleFunc("/feed", FeedMux)
     http.HandleFunc("/login", LoginMux)
     http.Handle("/static/", http.StripPrefix("/static", staticServer))
-    fmt.Println("Serving at localhost:8080 ----------------------------------------------------")
-    http.ListenAndServe(":8080", nil)
+    fmt.Printf("Serving at %s ----------------------------------------------------", port)
+    http.ListenAndServe(port, nil)
 }
