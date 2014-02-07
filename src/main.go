@@ -215,7 +215,17 @@ func Poll(w http.ResponseWriter, r *http.Request) {
         timeout <- true
     }()
     user := room.GetUser(ParseUsername(r))
+
+    if user == nil {
+      msg := fmt.Sprintf("Cannot find user %s\n", ParseUsername(r))
+
+      http.Error(w, msg, http.StatusInternalServerError)
+      fmt.Fprintf(os.Stderr, msg)
+      return
+    }
+
     var msg *ChatMessage
+
     if user.c != nil {
         select {
         case msg = <-user.c:
