@@ -203,7 +203,7 @@ var Chat = (function($) {
         handleError($chatErrors, textStatus, errorThrown);
       },
       complete: function() {
-        poll();
+        setTimeout(poll, 500);
       }
     });
   };
