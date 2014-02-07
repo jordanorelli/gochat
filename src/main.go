@@ -4,11 +4,12 @@ import (
     "container/list"
     "container/ring"
     "fmt"
-    "http"
-    "json"
+    "net/http"
+    "encoding/json"
     "os"
     "strconv"
     "time"
+    "errors"
 )
 
 var (
@@ -57,10 +58,10 @@ func (r *Room)getUserElement(username string) (*list.Element, *User) {
     return nil, nil
 }
 
-func (r *Room)AddUser(username string) (*User, os.Error) {
+func (r *Room)AddUser(username string) (*User, error) {
     user := r.GetUser(username)
     if user != nil {
-        return nil, os.NewError("That username is already taken.")
+        return nil, errors.New("That username is already taken.")
     }
     user = NewUser(username)
     r.Users.PushBack(user)
@@ -101,8 +102,8 @@ func (m *ChatMessage)WriteToResponse(w http.ResponseWriter) {
     }
 }
 
-func ParseJSONField(r *http.Request, fieldname string) (string, os.Error) {
-    requestLength, err := strconv.Atoui(r.Header["Content-Length"][0])
+func ParseJSONField(r *http.Request, fieldname string) (string, error) {
+    requestLength, err := strconv.ParseUint(r.Header["Content-Length"][0], 10, 32)
     if err != nil {
         fmt.Fprintf(os.Stderr, "unable to convert incoming login request content-lenth to uint.")
     }
@@ -127,15 +128,16 @@ func ParseUsername(r *http.Request) string {
     return ""
 }
 
-func ParseMessage(r *http.Request) (*ChatMessage, os.Error) {
-    msgLength, err := strconv.Atoui(r.Header["Content-Length"][0])
+func ParseMessage(r *http.Request) (*ChatMessage, error) {
+    msgLength, err := strconv.ParseUint(r.Header["Content-Length"][0], 10, 32)
     if err != nil {
         fmt.Fprintf(os.Stderr, "unable to convert incoming message content-length to uint.")
     }
     from := room.GetUser(ParseUsername(r))
 
     fmt.Printf("\tReceived message from user %s with length %d\n", from.Username, msgLength)
-    m := &ChatMessage{Username: from.Username, TimeStamp: time.UTC()}
+    t := time.Now().UTC()
+    m := &ChatMessage{Username: from.Username, TimeStamp: &t}
     raw := make([]byte, msgLength)
     r.Body.Read(raw)
     if err := json.Unmarshal(raw, m); err != nil {
@@ -145,15 +147,15 @@ func ParseMessage(r *http.Request) (*ChatMessage, os.Error) {
 }
 
 func Home(w http.ResponseWriter, r *http.Request) {
-    if r.RawURL == "/favicon.ico" {
+    if r.URL.Path == "/favicon.ico" {
         return
     }
-    fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.RawURL)
+    fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.URL.Path)
     http.ServeFile(w, r, "templates/index.html")
 }
 
 func LoginMux(w http.ResponseWriter, r *http.Request) {
-    fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.RawURL)
+    fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.URL.Path)
     switch r.Method {
     case "POST":
         Login(w, r)
@@ -165,13 +167,13 @@ func LoginMux(w http.ResponseWriter, r *http.Request) {
 func Login(w http.ResponseWriter, r *http.Request) {
     username, err := ParseJSONField(r, "username")
     if err != nil {
-        http.Error(w, err.String(), http.StatusInternalServerError)
+        http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
 
     user, err := room.AddUser(username)
     if err != nil {
-        http.Error(w, err.String(), http.StatusInternalServerError)
+        http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
 
@@ -188,7 +190,7 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func FeedMux(w http.ResponseWriter, r *http.Request) {
-    fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.RawURL)
+    fmt.Fprintf(os.Stdout, "%s %s\n", r.Method, r.URL.Path)
     switch r.Method {
     case "GET":
         Poll(w, r)
@@ -229,13 +231,12 @@ func Poll(w http.ResponseWriter, r *http.Request) {
 func main() {
     port := "0.0.0.0:8080"
     room = NewRoom()
-    staticDir := http.Dir("/projects/go/chat/static")
-    staticServer := http.FileServer(staticDir)
+    staticServer := http.FileServer(http.Dir("./static"))
 
     http.HandleFunc("/", Home)
     http.HandleFunc("/feed", FeedMux)
     http.HandleFunc("/login", LoginMux)
-    http.Handle("/static/", http.StripPrefix("/static", staticServer))
-    fmt.Printf("Serving at %s ----------------------------------------------------", port)
+    http.Handle("/static/", http.StripPrefix("/static/", staticServer))
+    fmt.Printf("Serving at %s ----------------------------------------------------\n", port)
     http.ListenAndServe(port, nil)
 }
